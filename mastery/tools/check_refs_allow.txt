@@ -19,3 +19,6 @@ testing/README.md
 
 # внутренности xlsx (методика разбора в skill xlsx_stdlib_parse)
 xl/*.xml
+
+# примеры временных файлов в инструкциях
+tmp/*
