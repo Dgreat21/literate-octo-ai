@@ -24,8 +24,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -107,13 +105,18 @@ def tg_notify(text: str) -> bool:
     chat = users.split(",")[0].strip() if users else ""
     if not token or not chat:
         return False
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    # curl, а не urllib: у framework-питона на маке бывает пустой trust store
+    # (CERTIFICATE_VERIFY_FAILED), curl ходит через системные сертификаты
+    proc = subprocess.run(
+        ["curl", "-s", "-m", "15",
+         f"https://api.telegram.org/bot{token}/sendMessage",
+         "--data-urlencode", f"chat_id={chat}",
+         "--data-urlencode", f"text={text}"],
+        capture_output=True, text=True,
+    )
     try:
-        with urllib.request.urlopen(
-            f"https://api.telegram.org/bot{token}/sendMessage", data, timeout=15
-        ) as resp:
-            return json.load(resp).get("ok", False)
-    except OSError:
+        return proc.returncode == 0 and json.loads(proc.stdout).get("ok", False)
+    except (json.JSONDecodeError, ValueError):
         return False
 
 

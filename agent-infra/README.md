@@ -42,4 +42,4 @@
 Зарегистрированы в `mastery/registry.csv`: `herdr-report` (MST-30),
 `dsh-headless-job` (MST-31), `dsh-tg-remote` (MST-32) — ведут в инструкцию
 стека; `task_executor` (MST-33) — протокол исполнителя делегированного
-тикета (`by_team/task_executor/SKILL.md`). Триггеры смотри в реестре.
+тикета (`mastery/tools/addons/by_team/task_executor/SKILL.md`). Триггеры смотри в реестре.

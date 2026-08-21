@@ -143,4 +143,8 @@ dsh --profile headless --patch /tmp/m.yml "задача"
 - `herdr pane read <id> --source recent-unwrapped --lines 120` — лог панели;
 - `herdr agent list` — кого стадо видит и в каком статусе;
 - web-панель молчит — `curl -s http://127.0.0.1:3081` и лог её пейна;
-- бот молчит — лог пейна бота: отклонённые user_id печатаются именно туда.
+- бот молчит — лог пейна бота: отклонённые user_id печатаются именно туда;
+- нотификация делегирования не приходит, в ответе `chat not found` — ты ни
+  разу не нажал `/start` у бота: Telegram запрещает ботам писать первыми;
+- `CERTIFICATE_VERIFY_FAILED` в python-скриптах — пустой trust store
+  framework-питона на маке; обвязка поэтому ходит в Telegram через curl.
