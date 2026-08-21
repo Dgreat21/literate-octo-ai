@@ -5,7 +5,7 @@ DEMO-3,блокирует,DEMO-1
 DEMO-4,входит в,PRJ-1
 PRJ-1,входит в,GOAL-1
 MS-1,реализует,PRJ-1
-PRJ-2,входит в,GOAL-2
+PRJ-2,входит в,GOAL-3
 INFRA-1,входит в,PRJ-2
 INFRA-2,входит в,INFRA-1
 INFRA-3,входит в,INFRA-1
