@@ -16,6 +16,9 @@ python3 -c "import csv; [print(r['ключ'], r['статус_тег'], r['на�
 [`mastery/tools/saturday-tracker/`](../tools/saturday-tracker/), там же
 полная документация по формату (`docs/DATA_FORMAT.md`) и архитектуре.
 
+**Весь трекер одним взглядом:** [`OVERVIEW.md`](OVERVIEW.md) — генерируемый
+снимок иерархии и статусов с инвариантами lineage.
+
 ## Файлы
 
 | Файл | Что внутри | Ключи |
