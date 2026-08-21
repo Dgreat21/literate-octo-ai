@@ -62,8 +62,13 @@ data-проектом; здесь оно очищено от проектной 
 ## Как переиспользовать
 
 ```bash
-git clone --recurse-submodules https://github.com/Dgreat21/literate-octo-ai.git .context
+git clone https://github.com/Dgreat21/literate-octo-ai.git .context
+cd .context && git submodule update --init mastery/tools/saturday-tracker
 ```
+
+Полный `--recurse-submodules` притащит ещё и `agent-infra/vendor/` —
+запиненные исходники Herdr и DeepSeek Harness (тяжёлые, нужны только
+как референс).
 
 1. Положи директорию рядом с кодом своего проекта (в оригинале она называется
    `.context/` и скрыта от кодового репозитория через `.git/info/exclude`).

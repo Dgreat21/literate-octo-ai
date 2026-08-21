@@ -1,3 +1,9 @@
 [submodule "mastery/tools/saturday-tracker"]
 	path = mastery/tools/saturday-tracker
 	url = https://github.com/Dgreat21/saturday-tracker.git
+[submodule "agent-infra/vendor/herdr"]
+	path = agent-infra/vendor/herdr
+	url = https://github.com/herdrdev/herdr.git
+[submodule "agent-infra/vendor/deepseek-harness"]
+	path = agent-infra/vendor/deepseek-harness
+	url = https://github.com/deepseek-ai/deepseek-harness.git

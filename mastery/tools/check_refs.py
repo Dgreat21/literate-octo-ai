@@ -24,7 +24,8 @@ WORKSPACE = CTX.parent
 ALLOW_FILE = Path(__file__).parent / "check_refs_allow.txt"
 
 SKIP_PARTS = {".git", "__pycache__", ".locks"}
-SKIP_REL = ("mastery/tools/addons/source/", "mastery/tools/saturday-tracker/")
+SKIP_REL = ("mastery/tools/addons/source/", "mastery/tools/saturday-tracker/",
+            "agent-infra/vendor/")
 SKIP_FILES = {"work_journal.md"}
 
 TOKEN = re.compile(

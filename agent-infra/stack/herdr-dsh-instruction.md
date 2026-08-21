@@ -15,6 +15,21 @@
 Проверенные версии: Herdr 0.8.2, dsh 0.1.0-rc.7, Node ≥ 24 (нужно ^22.19 или ≥24),
 Python ≥ 3.11 (для бота — aiogram в venv).
 
+### Апстримы — reference-сабмодули `agent-infra/vendor/`
+
+Исходники обоих инструментов запинены на ревизии, против которых проверен
+стек. Это референс для чтения, **не** дерево сборки: установка всё равно
+идёт пакетным менеджером (`npx @deepseek-ai/dsh`, installer herdr.dev).
+
+| Сабмодуль | Апстрим | Ревизия |
+|---|---|---|
+| `vendor/herdr` | github.com/herdrdev/herdr | тег `v0.8.2` |
+| `vendor/deepseek-harness` | github.com/deepseek-ai/deepseek-harness | тег `dsh-v0.1.0-rc.7` |
+
+Клонировать их не обязательно: `git submodule update --init
+mastery/tools/saturday-tracker` подтянет только трекер; `--recursive`
+притащит и vendor (herdr — тяжёлый, клонируй с `--depth 1`).
+
 ## 2. Запуск: `up.sh`
 
 ```bash
