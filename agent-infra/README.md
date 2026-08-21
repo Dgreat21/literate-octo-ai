@@ -17,11 +17,13 @@
 | Единый вход | [`stack/up.sh`](stack/up.sh) | Herdr-воркспейс `octo`, панель dsh web, панель бота, смоук |
 | Headless-обёртка | [`stack/bin/dsh-herdr`](stack/bin/dsh-herdr) | одноразовая задача dsh с репортом статуса в сайдбар Herdr |
 | Telegram-бот | [`stack/tg/dsh_tg.py`](stack/tg/dsh_tg.py) | задачи dsh с телефона, long polling, без проброса портов |
+| Дизайн мобильного клиента | [`hearth/`](hearth/README.md) | Hearth: телефон как окно к harness'у (макет Дениса, `INFRA-7`) |
 
 ## Треки
 
 - **A — сборка**: `up.sh`, панели, смоук (`INFRA-2`, `INFRA-3`).
-- **B — удалёнка**: TG-бот (`INFRA-4`), Tailscale + Herdr reattach (`INFRA-5`).
+- **B — удалёнка**: TG-бот (`INFRA-4`), Tailscale + Herdr reattach (`INFRA-5`),
+  дизайн родного клиента Hearth (`INFRA-7`).
 - **C — исследование**: диздок «dsh как оркестратор стада» (`INFRA-6`),
   черновик на кухне `mastery/design_docs/herdr_dsh_stack.md`.
 
