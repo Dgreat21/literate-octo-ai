@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""hearthd — read-mostly aggregator of harness state on top of the herdr socket API.
+
+Serves the Hearth PWA (../app) and a small JSON API for the phone.
+
+Design invariant (INFRA-7 §3): the app must never lie about the link.
+Every JSON response carries `as_of`; when herdr is unreachable the daemon
+answers 503 with an explicit error instead of the last known good state.
+Nothing here is cached across a failure — a stale answer would be a lie.
+
+Stdlib only. Python 3.9+.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import mimetypes
+import os
+import re
+import secrets
+import socket
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs, unquote
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+TOKEN_FILE = Path.home() / ".hearth" / "token"
+HERDR_TIMEOUT = 4.0          # seconds; herdr is local, anything slower is a fault
+SNAPSHOT_TTL = 1.0           # seconds; de-bounce polling, never survives an error
+ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][B0]")
+
+# herdr agent lifecycle states -> what the phone shows
+STATUS_LABEL = {
+    "working": "working",
+    "idle": "idle",
+    "blocked": "needs you",
+    "done": "done",
+    "unknown": "unknown",
+}
+
+
+class HerdrError(RuntimeError):
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(detail or code)
+        self.code = code
+        self.detail = detail
+
+
+def herdr(*args: str, timeout: float = HERDR_TIMEOUT) -> str:
+    """Run a herdr CLI command, returning stdout. Raises HerdrError on any fault."""
+    try:
+        proc = subprocess.run(
+            ["herdr", *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError:
+        raise HerdrError("herdr_missing", "herdr is not on PATH")
+    except subprocess.TimeoutExpired:
+        raise HerdrError("herdr_timeout", f"herdr {' '.join(args)} took >{timeout}s")
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        raise HerdrError("herdr_failed", (proc.stderr or out or "").strip()[:400])
+    return out
+
+
+def herdr_json(*args: str, timeout: float = HERDR_TIMEOUT) -> dict:
+    out = herdr(*args, timeout=timeout)
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        raise HerdrError("herdr_garbled", out[:200])
+    if isinstance(data, dict) and "error" in data:
+        err = data["error"]
+        raise HerdrError(str(err.get("code", "herdr_error")), str(err.get("message", "")))
+    return data
+
+
+def strip_ansi(s: str) -> str:
+    return ANSI.sub("", s).replace("\r", "")
+
+
+class Snapshot:
+    """Herd state with a one-second de-bounce. A failure is never cached."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._value: dict | None = None
+        self._at = 0.0
+
+    def get(self) -> dict:
+        with self._lock:
+            now = time.time()
+            if self._value is not None and now - self._at < SNAPSHOT_TTL:
+                return self._value
+            value = self._read()
+            self._value, self._at = value, time.time()
+            return value
+
+    @staticmethod
+    def _read() -> dict:
+        # `pane list` over `agent list`: it shows every pane, with an agent label
+        # only where herdr actually detected one. Listing only detected agents
+        # would quietly hide panes the phone is meant to be a window onto.
+        data = herdr_json("pane", "list")
+        raw = data.get("result", {}).get("panes", [])
+        agents = []
+        for a in raw:
+            status = a.get("agent_status", "unknown")
+            agents.append({
+                "pane_id": a.get("pane_id"),
+                "workspace": a.get("workspace_id"),
+                "tab": a.get("tab_id"),
+                "agent": a.get("agent") or "shell",
+                "status": status,
+                "label": STATUS_LABEL.get(status, status),
+                "title": (a.get("terminal_title_stripped") or a.get("terminal_title") or "").strip(),
+                "cwd": a.get("foreground_cwd") or a.get("cwd") or "",
+                "focused": bool(a.get("focused")),
+                "seq": a.get("state_change_seq"),
+            })
+        order = {"blocked": 0, "working": 1, "idle": 2, "unknown": 3, "done": 4}
+        agents.sort(key=lambda x: (order.get(x["status"], 9), x["pane_id"] or ""))
+        summary = {k: 0 for k in ("working", "blocked", "idle", "done", "unknown")}
+        for a in agents:
+            summary[a["status"]] = summary.get(a["status"], 0) + 1
+        return {"agents": agents, "summary": summary}
+
+
+SNAPSHOT = Snapshot()
+
+
+def short_path(p: str) -> str:
+    home = str(Path.home())
+    return "~" + p[len(home):] if p.startswith(home) else p
+
+
+def read_tail(pane_id: str, lines: int) -> list[str]:
+    out = herdr("pane", "read", pane_id, "--lines", str(lines), "--format", "text")
+    return [l.rstrip() for l in strip_ansi(out).split("\n")]
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "hearthd/0.1"
+    token = ""
+
+    # ---------- plumbing ----------
+
+    def log_message(self, fmt, *args):  # quieter than the default one-line-per-hit
+        if self.server.verbose:  # type: ignore[attr-defined]
+            sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
+
+    def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store" if ctype.startswith("application/json") else "no-cache")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, code: int, payload: dict) -> None:
+        now = time.time()
+        payload.setdefault("as_of", round(now, 3))
+        payload.setdefault("as_of_iso", time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)))
+        self._send(code, json.dumps(payload, ensure_ascii=False).encode(), "application/json; charset=utf-8")
+
+    def _authorised(self, query: dict) -> bool:
+        if not self.token:
+            return True
+        header = (self.headers.get("X-Hearth-Token") or "").strip()
+        supplied = header or (query.get("t", [""])[0])
+        return secrets.compare_digest(supplied, self.token)
+
+    # ---------- routing ----------
+
+    def do_GET(self) -> None:
+        self._route()
+
+    def do_HEAD(self) -> None:
+        self._route()
+
+    def do_POST(self) -> None:
+        self._route()
+
+    def _route(self) -> None:
+        url = urlparse(self.path)
+        path, query = url.path, parse_qs(url.query)
+        if path.startswith("/api/"):
+            if not self._authorised(query):
+                return self._json(401, {"error": "unauthorised"})
+            try:
+                return self._api(path, query)
+            except HerdrError as e:
+                # Honest unreachable beats a cached lie.
+                return self._json(503, {"error": e.code, "detail": e.detail})
+            except Exception as e:  # noqa: BLE001 - surface, never swallow
+                return self._json(500, {"error": "hearthd_fault", "detail": repr(e)[:300]})
+        return self._static(path)
+
+    def _api(self, path: str, query: dict) -> None:
+        parts = [unquote(p) for p in path.split("/") if p][1:]  # drop "api"; pane ids carry ":"
+
+        if parts == ["health"]:
+            return self._json(200, {"ok": True, "host": socket.gethostname()})
+
+        if parts == ["state"]:
+            snap = SNAPSHOT.get()
+            return self._json(200, {
+                "host": socket.gethostname(),
+                "agents": [{**a, "cwd_short": short_path(a["cwd"])} for a in snap["agents"]],
+                "summary": snap["summary"],
+            })
+
+        if len(parts) >= 2 and parts[0] == "agent":
+            pane_id = parts[1]
+            known = {a["pane_id"]: a for a in SNAPSHOT.get()["agents"]}
+            if pane_id not in known:
+                return self._json(404, {"error": "unknown_pane", "detail": pane_id})
+            agent = known[pane_id]
+
+            if len(parts) == 2 and self.command in ("GET", "HEAD"):
+                try:
+                    lines = max(5, min(200, int(query.get("lines", ["60"])[0])))
+                except ValueError:
+                    lines = 60
+                tail = read_tail(pane_id, lines)
+                return self._json(200, {
+                    **agent,
+                    "cwd_short": short_path(agent["cwd"]),
+                    "tail": tail,
+                    "tail_source": "raw",  # 1b-iii (digest) needs an event stream — not in v0
+                })
+
+            if parts[2:] == ["stop"] and self.command == "POST":
+                # Fire the interrupt, then report what herdr says *now*.
+                # The phone must not assume the run died: it waits for the status to move.
+                try:
+                    herdr("agent", "send-keys", pane_id, "ctrl+c")
+                    route = "agent"
+                except HerdrError:
+                    herdr("pane", "send-keys", pane_id, "ctrl+c")
+                    route = "pane"
+                time.sleep(0.35)
+                fresh = next((a for a in Snapshot._read()["agents"] if a["pane_id"] == pane_id), None)
+                return self._json(202, {
+                    "sent": "ctrl+c", "via": route, "pane_id": pane_id,
+                    "status_before": agent["status"],
+                    "status_now": (fresh or {}).get("status", "unknown"),
+                    "settled": bool(fresh and fresh["status"] != "working"),
+                })
+
+        return self._json(404, {"error": "no_such_route", "detail": path})
+
+    def _static(self, path: str) -> None:
+        rel = "index.html" if path in ("/", "") else path.lstrip("/")
+        target = (APP_DIR / rel).resolve()
+        if not str(target).startswith(str(APP_DIR.resolve())) or not target.is_file():
+            return self._send(404, b"not found", "text/plain; charset=utf-8")
+        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        if target.suffix == ".webmanifest":
+            ctype = "application/manifest+json"
+        if ctype.startswith("text/") or "javascript" in ctype or "json" in ctype:
+            ctype += "; charset=utf-8"
+        self._send(200, target.read_bytes(), ctype)
+
+
+def resolve_token(arg: str | None) -> str:
+    if arg == "":
+        return ""  # explicit --token '' disables auth (loopback only, your call)
+    if arg:
+        return arg
+    if TOKEN_FILE.exists():
+        return TOKEN_FILE.read_text().strip()
+    token = secrets.token_urlsafe(12)
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOKEN_FILE.write_text(token + "\n")
+    TOKEN_FILE.chmod(0o600)
+    return token
+
+
+def lan_ip() -> str | None:
+    for iface in ("en0", "en1"):
+        try:
+            out = subprocess.run(["ipconfig", "getifaddr", iface],
+                                 capture_output=True, text=True, timeout=2).stdout.strip()
+            if out:
+                return out
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="hearthd — harness state for the phone")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address; use 0.0.0.0 to reach it from the phone on the same wifi")
+    ap.add_argument("--port", type=int, default=8788)
+    ap.add_argument("--token", default=None,
+                    help="shared secret; defaults to ~/.hearth/token, '' disables auth")
+    ap.add_argument("--verbose", action="store_true")
+    args = ap.parse_args()
+
+    try:
+        herdr("status", "server", timeout=5)
+    except HerdrError as e:
+        print(f"warning: herdr not answering ({e.code}: {e.detail}) — "
+              f"hearthd will start and report 'unreachable' honestly", file=sys.stderr)
+
+    Handler.token = resolve_token(args.token)
+    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    httpd.verbose = args.verbose  # type: ignore[attr-defined]
+    httpd.daemon_threads = True
+
+    frag = f"#t={Handler.token}" if Handler.token else ""
+    print(f"hearthd on http://{args.host}:{args.port}{frag}", flush=True)
+    if args.host == "0.0.0.0":
+        ip = lan_ip()
+        if ip:
+            print(f"  from the phone: http://{ip}:{args.port}{frag}", flush=True)
+    print(f"  serving {APP_DIR}", flush=True)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nhearthd stopped")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

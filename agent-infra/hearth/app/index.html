@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Hearth">
+<meta name="theme-color" content="#f5ead8">
+<title>Hearth</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- The link line is the first thing on the first screen. It is not decoration:
+       every control below it reads its state. -->
+  <header id="linkbar" class="linkbar" data-state="boot">
+    <span class="dot"></span>
+    <span class="link-host">connecting…</span>
+    <span class="link-age"></span>
+  </header>
+
+  <main id="screens">
+
+    <section class="screen" data-screen="home">
+      <h1 class="display">Hearth</h1>
+      <p class="sub" id="home-sub">—</p>
+
+      <div id="hero"></div>
+      <div id="attention"></div>
+    </section>
+
+    <section class="screen" data-screen="detail" hidden>
+      <button class="back" data-go="home">← back</button>
+      <h2 class="title" id="detail-title">—</h2>
+      <p class="sub" id="detail-sub">—</p>
+      <div id="detail-body"></div>
+    </section>
+
+    <section class="screen" data-screen="runs" hidden>
+      <h2 class="title">Panes</h2>
+      <p class="sub" id="runs-sub">—</p>
+      <div id="runs-list"></div>
+    </section>
+
+    <section class="screen" data-screen="settings" hidden>
+      <h2 class="title">Settings</h2>
+      <div id="settings-body"></div>
+    </section>
+
+  </main>
+
+  <nav id="tabbar" class="tabbar">
+    <button data-go="home"     class="on"><span>home</span></button>
+    <button data-go="runs"><span>panes</span></button>
+    <button data-go="detail"><span>log</span></button>
+    <button data-go="settings"><span>settings</span></button>
+  </nav>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

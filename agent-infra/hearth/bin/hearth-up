@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# hearth-up — start hearthd and print the link to open on the phone.
+#
+#   ./bin/hearth-up            # LAN: reachable from the phone on the same wifi
+#   ./bin/hearth-up --local    # loopback only (mac browser)
+#
+# Outside the home wifi you need Tailscale (INFRA-5) — nothing here is exposed
+# to the internet, by design.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${HEARTH_PORT:-8788}"
+HOST="0.0.0.0"
+[ "${1:-}" = "--local" ] && HOST="127.0.0.1"
+
+command -v herdr >/dev/null || { echo "herdr not on PATH — start the stack first (agent-infra/stack/up.sh)"; exit 1; }
+
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "port $PORT is already taken — hearthd may already be running:"
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN | tail -n +2
+  exit 1
+fi
+
+exec python3 "$HERE/hearthd/hearthd.py" --host "$HOST" --port "$PORT"
