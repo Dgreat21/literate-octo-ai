@@ -18,7 +18,8 @@
 | Гайдбук расширения репо | [`stack/EXTENDING.md`](stack/EXTENDING.md) | как заводить в octo новое направление — на этом кейсе |
 | Единый вход | [`stack/up.sh`](stack/up.sh) | Herdr-воркспейс `octo`, панель dsh web, панель бота, смоук |
 | Headless-обёртка | [`stack/bin/dsh-herdr`](stack/bin/dsh-herdr) | одноразовая задача dsh с репортом статуса в сайдбар Herdr |
-| Telegram-бот | [`stack/tg/dsh_tg.py`](stack/tg/dsh_tg.py) | задачи dsh с телефона, long polling, без проброса портов |
+| Telegram-бот | [`stack/tg/dsh_tg.py`](stack/tg/dsh_tg.py) | задачи dsh с телефона, long polling, несколько сессий в чате, живая плашка прогона |
+| Смоук бота | [`stack/tg/smoke_dsh_tg.py`](stack/tg/smoke_dsh_tg.py) | бот без Telegram и без модели: сессии, клавиатуры, оверлей, шаги |
 | Дизайн мобильного клиента | [`hearth/`](hearth/README.md) | Hearth: телефон как окно к harness'у (макет Дениса, `INFRA-7`) |
 | Делегирование тикетов | [`stack/bin/delegate`](stack/bin/delegate) | «кнопка отдать агенту» v0: контекст тикета → исполнитель по MST-33 → нотификация в TG |
 
