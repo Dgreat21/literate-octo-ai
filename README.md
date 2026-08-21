@@ -59,6 +59,47 @@ data-проектом; здесь оно очищено от проектной 
 7. **Артефакт или не было** (rule-1) — задача закрыта, когда существует
    файл-артефакт, а не рассказ о работе.
 
+## Быстрый старт: harness внутри Herdr
+
+Идея сборки: **Herdr — стойло, dsh — агент в нём**. Каждый инстанс dsh живёт
+в своём Herdr-пейне (инстанс на проект), статусы видны в сайдбаре через
+`report-agent`, к стаду можно переподключиться с другой машины.
+
+```bash
+# 0. Предпосылки (один раз)
+curl -fsSL https://herdr.dev/install.sh | sh   # Herdr (или: brew install herdr)
+npx @deepseek-ai/dsh web                       # dsh: первый запуск скачает и поднимет web UI
+                                               # ^C после проверки; нужен Node ^22.19 || >=24, плюс jq
+
+# 1. Стадо
+herdr                                          # поднять сервер и TUI (оставь запущенным)
+
+# 2. Этот репозиторий
+git clone https://github.com/Dgreat21/literate-octo-ai.git
+cd literate-octo-ai
+
+# 3. Весь стек одной командой (идемпотентно)
+./agent-infra/stack/up.sh
+```
+
+`up.sh` создаст Herdr-воркспейс `octo` (cwd = корень репо), поднимет в его
+пейне `dsh web --port 3081` — harness работает **внутри** пейна Herdr, — при
+наличии `~/.dsh-tg/env` (токен BotFather) добавит пейн Telegram-бота и
+прогонит смоук: web отвечает, `herdr agent list` непуст.
+
+Дальше:
+
+- **браузер** — http://127.0.0.1:3081 (web UI harness'а этого репозитория);
+- **разовые задачи** — `agent-infra/stack/bin/dsh-herdr "задача"`: headless-прогон
+  со статусом в сайдбаре;
+- **телефон** — Telegram-бот / SSH+Tailscale reattach / туннель к web UI;
+- агент, запущенный в пейне (`HERDR_ENV=1`), сам управляет стадом через
+  `herdr`-CLI — так и построена эта сборка.
+
+Подробности, безопасность и отладка —
+[`agent-infra/stack/herdr-dsh-instruction.md`](agent-infra/stack/herdr-dsh-instruction.md)
+(единственный источник по стеку, rule-3).
+
 ## Как переиспользовать
 
 ```bash
