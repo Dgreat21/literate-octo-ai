@@ -58,5 +58,10 @@ print(tm.graph(['GOAL-3','PRJ-2','MS-2'] + [f'INFRA-{i}' for i in range(1,15)]))
 - Модель headless-прогона задаётся только `--patch`-оверлеем.
 - Секреты бота — `~/.dsh-tg/env` (вне git); Telegram из python — через curl
   (trust store framework-питона пуст).
+- Ключ провайдера в боте — личный на telegram-id:
+  `~/.dsh-tg/users/<id>/.credentials.yaml` (0600), `--patch` по строке
+  `credentials`; окружение прогона чистится от `*_API_KEY`. Проверено:
+  прогон с подложным личным ключом падает `AUTH: 401`, а не уходит по
+  слоям в ключ хозяина.
 - Сквозной прогон делегирования: 1 тикет, 1 прогон, 0 ручных правок после.
 - Диаграмма lineage: RENDER_OK, SVG 44 КБ; негативный контроль — RENDER_ERR.

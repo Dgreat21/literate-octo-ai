@@ -32,8 +32,14 @@ command -v jq >/dev/null || fail "нужен jq"
 say "herdr $(herdr --version | awk '{print $2}') — сервер жив"
 
 # dsh может не быть в PATH интерактивного шелла (npx-установка) — фиксируем путь
-DSH_BIN="$(command -v dsh || true)"
+DSH_BIN="${DSH_BIN:-$(command -v dsh || true)}"
 [ -n "$DSH_BIN" ] || DSH_BIN="npx @deepseek-ai/dsh"
+# В пейн уходит строка для шелла: одиночный путь кавычим (пробелы в пути),
+# многословный запуск через npx кавычить нельзя — это не имя файла.
+case "$DSH_BIN" in
+  *' '*) DSH_CMD="$DSH_BIN" ;;
+  *)     DSH_CMD="\"$DSH_BIN\"" ;;
+esac
 say "dsh: $DSH_BIN"
 
 # ── помощники ────────────────────────────────────────────────────
@@ -82,7 +88,7 @@ if [ -z "$WEB_PANE" ]; then
     WEB_PANE="$(herdr pane split --pane "$FIRST" --direction down --cwd "$ROOT" --no-focus \
       | jq -r '.result.pane.pane_id')"
   fi
-  herdr pane run "$WEB_PANE" "\"$DSH_BIN\" web --port $PORT" >/dev/null
+  herdr pane run "$WEB_PANE" "$DSH_CMD web --port $PORT" >/dev/null
   say "запускаю dsh web --port $PORT в $WEB_PANE"
 fi
 for _ in $(seq 1 30); do
@@ -105,10 +111,11 @@ if [ -n "${TG_BOT_TOKEN:-}" ] || [ -f "$ENVFILE" ]; then
       | jq -r '.result.pane.pane_id')"
     if [ ! -x "$VENV/bin/python" ]; then
       say "готовлю venv бота ($VENV)"
-      python3 -m venv "$VENV" && "$VENV/bin/pip" -q install aiogram
+      # pyyaml: бот читает settings.yaml и пишет личные credentials-документы
+      python3 -m venv "$VENV" && "$VENV/bin/pip" -q install aiogram pyyaml
     fi
     herdr pane run "$BOT_PANE" \
-      "set -a; [ -f \"$ENVFILE\" ] && . \"$ENVFILE\"; set +a; TG_WORKSPACES=\"octo:$ROOT,home:\$HOME\" DSH_BIN=\"$DSH_BIN\" \"$VENV/bin/python\" \"$ROOT/agent-infra/stack/tg/dsh_tg.py\"" \
+      "set -a; [ -f \"$ENVFILE\" ] && . \"$ENVFILE\"; set +a; TG_WORKSPACES=\"\${TG_WORKSPACES:-octo:$ROOT,home:\$HOME}\" DSH_BIN=\"$DSH_BIN\" \"$VENV/bin/python\" \"$ROOT/agent-infra/stack/tg/dsh_tg.py\"" \
       >/dev/null
     say "бот запущен в $BOT_PANE (лог: herdr pane read $BOT_PANE --source recent-unwrapped)"
   fi
