@@ -1,0 +1,21 @@
+# Будущие артефакты: обещаны планами, ещё не созданы.
+# Файл появился — строка перестаёт срабатывать сама (existence-check выигрывает).
+# Паттерны fnmatch, по одному на строку.
+
+# внешние библиотеки-референсы: клонируются отдельно, вне git (см. mastery/README.md)
+mastery/tools/addons/source/*
+
+# сабмодуль трекера: путей пакета нет до git submodule update --init
+saturday_tracker/*
+docs/DATA_FORMAT.md
+
+# кейсы командных скиллов ссылаются на артефакты исходного workspace,
+# в публичный слепок не вошедшие — это история, не обещание
+optimisation/*
+datacatalog/*
+dsh-agent/*
+llm-council/*
+testing/README.md
+
+# внутренности xlsx (методика разбора в skill xlsx_stdlib_parse)
+xl/*.xml

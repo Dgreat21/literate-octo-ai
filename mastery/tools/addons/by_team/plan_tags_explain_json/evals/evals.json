@@ -1,0 +1,111 @@
+{
+  "skill_name": "plan_tags_explain_json",
+  "evals": [
+    {
+      "id": "no_regex_on_text_explain",
+      "name": "Не парсить текстовый EXPLAIN регулярками",
+      "prompt": "Запрос stg_to_ods в DAG 1C.ODS.EXPENSE_ORDER работает 40 минут. Сними план и напиши скрипт, который найдёт в нём проблемные места: Nested Loop, Motion, Seq Scan по большим таблицам. Планы будем разбирать пачками.",
+      "assertions": [
+        {
+          "type": "must_contain",
+          "value": "EXPLAIN (FORMAT JSON)",
+          "description": "План снимается в формате JSON"
+        },
+        {
+          "type": "must_state",
+          "value": "текстовый вывод EXPLAIN не парсится регулярками: вложенность передана отступами, структура нестабильна между версиями GP/PG",
+          "description": "Явно отвергнут разбор текста регулярками"
+        },
+        {
+          "type": "must_contain_any",
+          "value": ["Node Type", "Plans", "Plan Rows", "Plan Width", "Senders", "Receivers"],
+          "description": "Используются ключи JSON-плана, а не текстовые шаблоны"
+        },
+        {
+          "type": "must_reference",
+          "value": "optimisation/tools/plan_tagger.py",
+          "description": "Предложено использовать готовый теггер, а не писать разбор с нуля"
+        },
+        {
+          "type": "must_not_contain_any",
+          "value": ["re.search", "re.compile", "re.findall", "grep -E"],
+          "description": "Нет регулярок по выводу плана"
+        }
+      ]
+    },
+    {
+      "id": "gather_motion_false_positive",
+      "name": "Двухфазная агрегация не помечается как анти-паттерн",
+      "prompt": "Мой детектор помечает тегом GATHER_MOTION_TO_ONE вот этот план и я не понимаю, что чинить:\nAggregate\n  Gather Motion 32:1\n    Aggregate\n      Seq Scan on ods.query_snapshots\nДетектор устроен просто: если у Motion-узла Receivers=1, Senders>1 и он не корневой — вешаем тег. Это правильно?",
+      "assertions": [
+        {
+          "type": "must_state",
+          "value": "это ложное срабатывание: Aggregate -> Gather Motion -> Aggregate есть двухфазная агрегация и корректный план MPP",
+          "description": "Распознана легитимная двухфазная агрегация"
+        },
+        {
+          "type": "must_state",
+          "value": "критерий по глубине узла (depth > 0) недостаточен, нужна цепочка типов родителей",
+          "description": "Глубина отвергнута как критерий"
+        },
+        {
+          "type": "must_contain_any",
+          "value": ["Aggregate", "Finalize Aggregate", "GroupAggregate", "WindowAgg", "Sort", "Limit", "Unique"],
+          "description": "Перечислен список безопасных родителей"
+        },
+        {
+          "type": "must_state",
+          "value": "тег обоснован, когда через Gather протаскиваются сырые строки (кейс MR!435: Materialize под Nested Loop)",
+          "description": "Показано отличие настоящего анти-паттерна"
+        },
+        {
+          "type": "must_state",
+          "value": "новый детектор проверяется и на легитимном плане тоже, а не только на анти-паттерне",
+          "description": "Негативный контроль детектора"
+        }
+      ]
+    },
+    {
+      "id": "safe_collection_and_limits",
+      "name": "Безопасный сбор на живом кластере и честные ограничения",
+      "prompt": "Хочу разом снять планы по всем запросам из ods.query_snapshots за последний месяц и построить рейтинг неоптимальности. Планирую EXPLAIN ANALYZE, чтобы цифры были настоящие, и count(*) по снапшотам как частоту запуска. Ок?",
+      "assertions": [
+        {
+          "type": "must_state",
+          "value": "EXPLAIN ANALYZE реально выполняет запрос и на таком объёме недопустим; снимается только EXPLAIN без ANALYZE",
+          "description": "EXPLAIN ANALYZE отклонён"
+        },
+        {
+          "type": "must_state",
+          "value": "count(*) по снапшотам не является частотой запуска: срез раз в 5 минут систематически недопредставляет быстрые запросы; честная частота только из pg_stat_statements",
+          "description": "Ограничение снапшотов проговорено"
+        },
+        {
+          "type": "must_state",
+          "value": "query_text обрезан по track_activity_query_size (дефолт 1024), длинные stg_to_ods выпадают из анализа",
+          "description": "Ограничение обрезки текста проговорено"
+        },
+        {
+          "type": "must_state",
+          "value": "EXPLAIN офлайн отличается от плана на проде (search_path, GUC, work_mem), план — сигнал, а не приговор",
+          "description": "Ограничение офлайн-плана проговорено"
+        },
+        {
+          "type": "must_state",
+          "value": "без свежей статистики EXPLAIN врёт (Plan Rows=1), объёмозависимые теги SEQ_SCAN_LARGE и SPILL_RISK читаются с поправкой; ANALYZE точечно по согласованию с DBA",
+          "description": "Зависимость от статистики учтена"
+        },
+        {
+          "type": "must_contain_any",
+          "value": ["--sleep-ms", "--max-active", "--timeout-ms", "--limit", "statement_timeout", "application_name='plan_audit'"],
+          "description": "Названы предохранители сбора"
+        },
+        {
+          "type": "must_reference",
+          "value": "optimisation/tools/plan_audit_collect.py",
+          "description": "Предложен готовый сборщик вместо самописного"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+# append-only журнал: параллельные ветки сливаются объединением строк
+work_journal.md merge=union

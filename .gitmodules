@@ -1,0 +1,3 @@
+[submodule "mastery/tools/saturday-tracker"]
+	path = mastery/tools/saturday-tracker
+	url = https://github.com/Dgreat21/saturday-tracker.git

@@ -1,0 +1,6 @@
+mastery/.locks/
+__pycache__/
+.DS_Store
+
+# внешние библиотеки-референсы: клонируются отдельно, в истории им не место
+mastery/tools/addons/source/
