@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import subprocess
 import tempfile
 import time
@@ -66,6 +67,9 @@ MODELS: list[str] = [
 # "sdk"  — deepseek-harness-sdk со своим встроенным Node-рантаймом.
 #          Только Linux x64/arm64 и macOS 14+ на Apple Silicon.
 RUNNER = os.environ.get("DSH_TG_RUNNER", "cli")
+
+# dsh может не быть в PATH пейна (npx-установка): up.sh передаёт полный путь
+DSH_BIN: list[str] = shlex.split(os.environ.get("DSH_BIN", "dsh"))
 
 SESSION_ROOT = os.path.expanduser("~/.dsh-tg/sessions")
 TIMEOUT_SEC = int(os.environ.get("DSH_TG_TIMEOUT", "900"))
@@ -130,7 +134,7 @@ def run_via_cli(prompt: str, st: ChatState) -> str:
     patch = model_patch(st.model)
     try:
         proc = subprocess.run(
-            ["dsh", "--profile", "headless", "--patch", patch, prompt],
+            [*DSH_BIN, "--profile", "headless", "--patch", patch, prompt],
             cwd=WORKSPACES[st.workspace],
             capture_output=True,
             text=True,

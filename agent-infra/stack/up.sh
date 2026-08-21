@@ -31,6 +31,11 @@ herdr status server >/dev/null 2>&1 || fail "Herdr-сервер не запущ�
 command -v jq >/dev/null || fail "нужен jq"
 say "herdr $(herdr --version | awk '{print $2}') — сервер жив"
 
+# dsh может не быть в PATH интерактивного шелла (npx-установка) — фиксируем путь
+DSH_BIN="$(command -v dsh || true)"
+[ -n "$DSH_BIN" ] || DSH_BIN="npx @deepseek-ai/dsh"
+say "dsh: $DSH_BIN"
+
 # ── помощники ────────────────────────────────────────────────────
 ws_panes() { herdr pane list --workspace "$WS_ID" | jq -r '.result.panes[].pane_id'; }
 
@@ -64,7 +69,7 @@ else
 fi
 
 # 4. Панель dsh web (инстанс на проект: cwd = корень репо)
-WEB_PANE="$(find_pane_by_cmd "dsh web --port $PORT" || true)"
+WEB_PANE="$(find_pane_by_cmd "web --port $PORT" || true)"
 if [ -z "$WEB_PANE" ] && curl -sf -o /dev/null "http://127.0.0.1:$PORT"; then
   fail "порт $PORT занят чужим процессом вне воркспейса $LABEL — выбери другой: OCTO_DSH_PORT=<порт> $0"
 fi
@@ -77,7 +82,7 @@ if [ -z "$WEB_PANE" ]; then
     WEB_PANE="$(herdr pane split --pane "$FIRST" --direction down --cwd "$ROOT" --no-focus \
       | jq -r '.result.pane.pane_id')"
   fi
-  herdr pane run "$WEB_PANE" "dsh web --port $PORT" >/dev/null
+  herdr pane run "$WEB_PANE" "\"$DSH_BIN\" web --port $PORT" >/dev/null
   say "запускаю dsh web --port $PORT в $WEB_PANE"
 fi
 for _ in $(seq 1 30); do
@@ -91,7 +96,8 @@ herdr pane report-agent "$WEB_PANE" --source custom:octo-stack --agent dsh \
 say "web-панель: http://127.0.0.1:$PORT (пейн $WEB_PANE)"
 
 # 5. Панель tg-бота (если есть токен)
-if [ -n "${TG_BOT_TOKEN:-}" ]; then
+ENVFILE="$HOME/.dsh-tg/env"   # TG_BOT_TOKEN/TG_ALLOWED_USERS вне git и вне командной строки пейна
+if [ -n "${TG_BOT_TOKEN:-}" ] || [ -f "$ENVFILE" ]; then
   if BOT_PANE="$(find_pane_by_cmd "dsh_tg.py")"; then
     say "бот уже крутится в $BOT_PANE — пропускаю"
   else
@@ -102,12 +108,12 @@ if [ -n "${TG_BOT_TOKEN:-}" ]; then
       python3 -m venv "$VENV" && "$VENV/bin/pip" -q install aiogram
     fi
     herdr pane run "$BOT_PANE" \
-      "TG_WORKSPACES=\"octo:$ROOT,home:\$HOME\" \"$VENV/bin/python\" \"$ROOT/agent-infra/stack/tg/dsh_tg.py\"" \
+      "set -a; [ -f \"$ENVFILE\" ] && . \"$ENVFILE\"; set +a; TG_WORKSPACES=\"octo:$ROOT,home:\$HOME\" DSH_BIN=\"$DSH_BIN\" \"$VENV/bin/python\" \"$ROOT/agent-infra/stack/tg/dsh_tg.py\"" \
       >/dev/null
     say "бот запущен в $BOT_PANE (лог: herdr pane read $BOT_PANE --source recent-unwrapped)"
   fi
 else
-  say "TG_BOT_TOKEN не задан — панель бота пропущена (см. herdr-dsh-instruction.md §4)"
+  say "нет ни TG_BOT_TOKEN, ни ~/.dsh-tg/env — панель бота пропущена (см. herdr-dsh-instruction.md §4)"
 fi
 
 # 6. Смоук

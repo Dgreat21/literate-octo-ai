@@ -65,12 +65,15 @@ fi
 
 cleanup() {
   release
-  [ -n "$PATCH_FILE" ] && rm -f "$PATCH_FILE"
+  if [ -n "$PATCH_FILE" ]; then rm -f "$PATCH_FILE"; fi
+  return 0
 }
 trap cleanup EXIT
 
 report working "${TASK:0:120}"
-if (cd "$WORKDIR" && dsh "${DSH_ARGS[@]}" "$TASK"); then
+# dsh может не быть в PATH (npx-установка): DSH_BIN="npx @deepseek-ai/dsh"
+read -ra DSH_CMD <<<"${DSH_BIN:-dsh}"
+if (cd "$WORKDIR" && "${DSH_CMD[@]}" "${DSH_ARGS[@]}" "$TASK"); then
   report idle "готово"
 else
   code=$?
