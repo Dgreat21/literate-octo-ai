@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""delegate — отдать тикет трекера агенту (v0 «кнопки делегирования»).
+
+    agent-infra/stack/bin/delegate INFRA-8
+    agent-infra/stack/bin/delegate INFRA-8 --dry-run   # показать промпт, не запускать
+
+Что делает:
+  1. собирает контекст тикета из трекера: строка, связи (в обе стороны),
+     комментарии — и составляет промпт по протоколу скилла task_executor;
+  2. запускает headless-прогон dsh в корне репозитория (через bin/dsh-herdr,
+     чтобы статус жил в сайдбаре Herdr);
+  3. по финальному маркеру `РЕЗУЛЬТАТ: ...` шлёт нотификацию в Telegram
+     (токен/чат — из ~/.dsh-tg/env): «готово» / «нужно решение» / «блокер».
+
+UI-кнопка в saturday-tracker должна звать ровно эту команду (тикет INFRA-9).
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+TRACKER = ROOT / "mastery" / "tracker"
+TIMEOUT = int(os.environ.get("DELEGATE_TIMEOUT", "1800"))
+
+
+def read_rows(path: Path) -> list[dict]:
+    with open(path, encoding="utf-8-sig") as fh:
+        return list(csv.DictReader(fh))
+
+
+def ticket_context(key: str) -> str:
+    tasks = read_rows(TRACKER / "tasks.csv")
+    row = next((r for r in tasks if r["ключ"] == key), None)
+    if row is None:
+        sys.exit(f"delegate: тикета {key} нет в tasks.csv")
+
+    lines = [f"## Тикет {key}"]
+    for col, val in row.items():
+        if val:
+            lines.append(f"- {col}: {val}")
+
+    links = read_rows(TRACKER / "links.csv")
+    rel = []
+    for edge in links:
+        if edge["откуда"] == key:
+            rel.append(f"- {key} {edge['тип']} {edge['куда']}")
+        elif edge["куда"] == key:
+            rel.append(f"- {edge['откуда']} {edge['тип']} {key} (обратная сторона)")
+    if rel:
+        lines.append("\n## Связи (проверь блокеры!)")
+        lines += rel
+        # статусы связанных тикетов — чтобы блокеры были видны сразу
+        related = {e["откуда"] for e in links if e["куда"] == key} | {
+            e["куда"] for e in links if e["откуда"] == key
+        }
+        lines.append("\n## Статусы связанных тикетов")
+        for r in tasks:
+            if r["ключ"] in related:
+                lines.append(f"- {r['ключ']}: {r['статус_тег']} — {r['название']}")
+
+    comments = TRACKER / "comments" / f"{key}.md"
+    if comments.exists():
+        lines.append("\n## Комментарии тикета\n")
+        lines.append(comments.read_text(encoding="utf-8"))
+
+    return "\n".join(lines)
+
+
+def build_prompt(key: str) -> str:
+    return f"""Тебе делегирован тикет {key} из трекера этого репозитория.
+
+Работай СТРОГО по протоколу скилла task_executor — прочитай его первым:
+mastery/tools/addons/by_team/task_executor/SKILL.md
+
+Обязательный порядок: собрать контекст (тикет, связи, комментарии, AGENTS.md,
+триггеры mastery/registry.csv) -> проверить блокеры -> статус «разработка»
+под локом -> работать до DoD артефактами -> комментарий в тикет -> статус
+«ревью» (не «закрыт») -> строки в work_journal.md и usage_log.csv ->
+последняя строка ответа: маркер `РЕЗУЛЬТАТ: ...`.
+
+Контекст тикета (собран обвязкой, но перепроверь по файлам — они истина):
+
+{ticket_context(key)}
+"""
+
+
+def tg_notify(text: str) -> bool:
+    env = Path.home() / ".dsh-tg" / "env"
+    if not env.exists():
+        return False
+    conf = dict(
+        line.split("=", 1)
+        for line in env.read_text().splitlines()
+        if "=" in line and not line.startswith("#")
+    )
+    token, users = conf.get("TG_BOT_TOKEN"), conf.get("TG_ALLOWED_USERS", "")
+    chat = users.split(",")[0].strip() if users else ""
+    if not token or not chat:
+        return False
+    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    try:
+        with urllib.request.urlopen(
+            f"https://api.telegram.org/bot{token}/sendMessage", data, timeout=15
+        ) as resp:
+            return json.load(resp).get("ok", False)
+    except OSError:
+        return False
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("key")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    prompt = build_prompt(args.key)
+    if args.dry_run:
+        print(prompt)
+        return 0
+
+    wrapper = ROOT / "agent-infra" / "stack" / "bin" / "dsh-herdr"
+    proc = subprocess.run(
+        [str(wrapper), "-C", str(ROOT), "-n", f"exec-{args.key.lower()}", prompt],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    )
+    out = proc.stdout.strip()
+    print(out)
+    if proc.stderr.strip():
+        print(proc.stderr.strip(), file=sys.stderr)
+
+    marker = re.search(r"^РЕЗУЛЬТАТ:\s*(.+)$", out, re.M)
+    verdict = marker.group(1).strip() if marker else "нужно решение: агент не оставил маркер"
+    if proc.returncode != 0:
+        verdict = f"блокер: dsh вышел с кодом {proc.returncode}"
+
+    if verdict.startswith("готово"):
+        icon, code = "✅", 0
+    elif verdict.startswith("блокер"):
+        icon, code = "⚠️", 2
+    else:
+        icon, code = "🖐", 1
+
+    tail = out[-600:] if len(out) > 600 else out
+    sent = tg_notify(f"{icon} {args.key}: {verdict}\n\n{tail}")
+    print(f"\n[delegate] {icon} {verdict} · tg: {'отправлено' if sent else 'нет'}")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

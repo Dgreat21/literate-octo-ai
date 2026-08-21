@@ -22,3 +22,7 @@ xl/*.xml
 
 # примеры временных файлов в инструкциях
 tmp/*
+
+# будущие артефакты DoD тикетов делегирования (INFRA-8)
+agent-infra/generated/*
+comments/INFRA-*.md

@@ -15,3 +15,9 @@ INFRA-6,входит в,INFRA-1
 INFRA-2,блокирует,INFRA-4
 INFRA-7,входит в,INFRA-1
 INFRA-5,блокирует,INFRA-7
+INFRA-8,входит в,INFRA-1
+INFRA-9,входит в,INFRA-1
+INFRA-10,входит в,INFRA-7
+INFRA-11,входит в,INFRA-7
+INFRA-9,относится к,INFRA-8
+INFRA-5,блокирует,INFRA-11

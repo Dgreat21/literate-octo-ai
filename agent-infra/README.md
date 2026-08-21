@@ -18,12 +18,16 @@
 | Headless-обёртка | [`stack/bin/dsh-herdr`](stack/bin/dsh-herdr) | одноразовая задача dsh с репортом статуса в сайдбар Herdr |
 | Telegram-бот | [`stack/tg/dsh_tg.py`](stack/tg/dsh_tg.py) | задачи dsh с телефона, long polling, без проброса портов |
 | Дизайн мобильного клиента | [`hearth/`](hearth/README.md) | Hearth: телефон как окно к harness'у (макет Дениса, `INFRA-7`) |
+| Делегирование тикетов | [`stack/bin/delegate`](stack/bin/delegate) | «кнопка отдать агенту» v0: контекст тикета → исполнитель по MST-33 → нотификация в TG |
 
 ## Треки
 
 - **A — сборка**: `up.sh`, панели, смоук (`INFRA-2`, `INFRA-3`).
 - **B — удалёнка**: TG-бот (`INFRA-4`), Tailscale + Herdr reattach (`INFRA-5`),
   дизайн родного клиента Hearth (`INFRA-7`).
+- **D — делегирование**: петля «тикет → агент-исполнитель → нотификация»:
+  обвязка (`INFRA-8`), кнопка в UI трекера (`INFRA-9`), вкладка и нотификации
+  в Hearth (`INFRA-10`), PWA-сборка (`INFRA-11`).
 - **C — исследование**: диздок «dsh как оркестратор стада» (`INFRA-6`),
   черновик на кухне `mastery/design_docs/herdr_dsh_stack.md`.
 
@@ -36,5 +40,6 @@
 ## Скиллы домена
 
 Зарегистрированы в `mastery/registry.csv`: `herdr-report` (MST-30),
-`dsh-headless-job` (MST-31), `dsh-tg-remote` (MST-32). Все три ведут в
-инструкцию стека — триггеры смотри в реестре.
+`dsh-headless-job` (MST-31), `dsh-tg-remote` (MST-32) — ведут в инструкцию
+стека; `task_executor` (MST-33) — протокол исполнителя делегированного
+тикета (`by_team/task_executor/SKILL.md`). Триггеры смотри в реестре.
