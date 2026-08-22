@@ -155,3 +155,7 @@ body {
 .hero-h { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .tail.short { max-height:6.2em; overflow:hidden; -webkit-mask-image:linear-gradient(#000 72%,transparent); mask-image:linear-gradient(#000 72%,transparent); }
 .tail.tall { white-space:pre; overflow-x:auto; }   /* a terminal does not reflow */
+
+/* iOS: a 700 ms press is a long-press to Safari — kill the callout menu and the
+   selection loupe, or the hold gesture fights the OS. */
+.hold, .row, .tabbar button { -webkit-touch-callout:none; }
