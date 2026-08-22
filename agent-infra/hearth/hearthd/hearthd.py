@@ -583,6 +583,30 @@ def resolve_token(arg: str | None) -> str:
     return token
 
 
+def bonjour_name() -> str | None:
+    """The mac's own .local name. Preferred over the IP for pairing: DHCP moves
+    the address (it moved once during this build), the Bonjour name does not,
+    and iOS resolves it on the same wifi without any setup."""
+    try:
+        name = subprocess.run(["scutil", "--get", "LocalHostName"],
+                              capture_output=True, text=True, timeout=3).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return None
+    if not name:
+        return None
+    host = f"{name}.local"
+    try:
+        with socket.create_connection((host, 0), timeout=0.001):
+            pass
+    except (OSError, ValueError):
+        pass
+    try:
+        socket.getaddrinfo(host, None)
+        return host
+    except OSError:
+        return None
+
+
 def lan_ip() -> str | None:
     for iface in ("en0", "en1"):
         try:
@@ -624,6 +648,7 @@ def main() -> int:
     ap.add_argument("--repo", default=None,
                     help="repo root holding mastery/tracker (default: the main worktree)")
     ap.add_argument("--dsh", default=DSH_URL, help=f"dsh web server base URL (default {DSH_URL})")
+    ap.add_argument("--no-qr", action="store_true", help="do not print the pairing QR")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -651,11 +676,36 @@ def main() -> int:
 
     frag = f"#t={Handler.token}" if Handler.token else ""
     print(f"hearthd on http://{args.host}:{args.port}{frag}", flush=True)
-    if args.host == "0.0.0.0":
-        ip = lan_ip()
-        if ip:
-            print(f"  from the phone: http://{ip}:{args.port}{frag}", flush=True)
     print(f"  serving {APP_DIR}", flush=True)
+
+    if args.host != "0.0.0.0":
+        return serve(httpd)
+
+    host = bonjour_name() or lan_ip()
+    if not host:
+        print("  no reachable name found — the phone cannot see this mac", flush=True)
+        return serve(httpd)
+
+    pair = f"http://{host}:{args.port}/{frag}"
+    print(f"\n  pair the phone: {pair}", flush=True)
+    if bonjour_name():
+        print("  (a .local name, so it survives the next DHCP lease)", flush=True)
+    if not args.no_qr:
+        try:
+            from qr import render
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from qr import render  # type: ignore
+        try:
+            print("\n" + render(pair), flush=True)
+            print("  point the camera at it — the token is in the link, "
+                  "so nothing is typed by hand\n", flush=True)
+        except ValueError as e:
+            print(f"  (no QR: {e})", flush=True)
+    return serve(httpd)
+
+
+def serve(httpd) -> int:
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
