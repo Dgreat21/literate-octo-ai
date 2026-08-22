@@ -159,3 +159,15 @@ body {
 /* iOS: a 700 ms press is a long-press to Safari — kill the callout menu and the
    selection loupe, or the hold gesture fights the OS. */
 .hold, .row, .tabbar button { -webkit-touch-callout:none; }
+
+/* ── session step digest (1b-iii) ─────────────────────────── */
+.grouphead { font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--n600);
+  margin:16px 4px 7px; }
+.steps { display:flex; flex-direction:column; gap:11px; }
+.step { display:flex; gap:10px; align-items:flex-start; }
+.step .sn { flex:none; font-family:var(--mono); font-size:10.5px; color:rgba(255,255,255,.3);
+  padding-top:3px; min-width:34px; }
+.step .sb { min-width:0; }
+.step .stext { font-size:13.5px; line-height:1.42; color:var(--ink-text); word-break:break-word; }
+.step .stools { font-family:var(--mono); font-size:10.5px; color:var(--accent-400); margin-top:2px; }
+.tail.rawline { margin-top:14px; white-space:pre-wrap; color:rgba(255,255,255,.62); }

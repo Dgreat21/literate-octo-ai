@@ -4,7 +4,7 @@
  * a cached /api response would show yesterday's numbers as today's, which is
  * exactly the lie the whole design exists to prevent (INFRA-7 §3, INFRA-11 DoD).
  */
-const SHELL = 'hearth-shell-v3';
+const SHELL = 'hearth-shell-v4';
 const FILES = [
   './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './fonts/caprasimo-latin.woff2', './fonts/caprasimo-latin-ext.woff2',

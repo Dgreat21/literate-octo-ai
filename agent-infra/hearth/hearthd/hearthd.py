@@ -26,9 +26,13 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 TOKEN_FILE = Path.home() / ".hearth" / "token"
+DSH_URL = "http://127.0.0.1:3081"   # the dsh web server; overridden by --dsh
+DSH_TIMEOUT = 6.0
 HERDR_TIMEOUT = 4.0          # seconds; herdr is local, anything slower is a fault
 SNAPSHOT_TTL = 1.0           # seconds; de-bounce polling, never survives an error
 ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][B0]")
@@ -37,7 +41,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][B0]")
 STATUS_LABEL = {
     "working": "working",
     "idle": "idle",
-    "blocked": "needs you",
+    "blocked": "blocked",
     "done": "done",
     "unknown": "unknown",
 }
@@ -81,6 +85,139 @@ def herdr_json(*args: str, timeout: float = HERDR_TIMEOUT) -> dict:
 
 def strip_ansi(s: str) -> str:
     return ANSI.sub("", s).replace("\r", "")
+
+
+class DshError(RuntimeError):
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(detail or code)
+        self.code = code
+        self.detail = detail
+
+
+def dsh_rpc(method: str, payload: dict, timeout: float = DSH_TIMEOUT) -> dict:
+    """Call one dsh apiproxy method. Raises DshError on any fault.
+
+    This is the half of the herd that herdr cannot see: sessions of `dsh web`
+    live inside the server process, not in a pane. Sourcing only from herdr
+    makes the phone report an idle pane while an agent works for half an hour.
+    """
+    body = json.dumps({
+        "type": "client-request", "rpcId": f"hearthd-{int(time.time()*1000)}",
+        "method": method, "payload": payload,
+    }).encode()
+    req = Request(f"{DSH_URL}/api/{method}", data=body,
+                  headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(req, timeout=timeout) as res:
+            data = json.loads(res.read().decode())
+    except HTTPError as e:
+        raise DshError("dsh_http", f"{e.code} {e.reason}")
+    except URLError as e:
+        raise DshError("dsh_unreachable", str(e.reason)[:200])
+    except (TimeoutError, socket.timeout):
+        raise DshError("dsh_timeout", f">{timeout}s")
+    except json.JSONDecodeError:
+        raise DshError("dsh_garbled", "")
+    result = data.get("result", {})
+    if not result.get("ok"):
+        err = result.get("error", {})
+        raise DshError(str(err.get("code", "dsh_error")), str(err.get("message", ""))[:200])
+    return result.get("value", {})
+
+
+def _tok_s(stats: dict) -> float | None:
+    ms = stats.get("decodeMs") or 0
+    tok = stats.get("decodeTokens") or 0
+    return round(tok / (ms / 1000), 1) if ms > 0 and tok else None
+
+
+def read_sessions() -> list[dict]:
+    """Running-first list of dsh sessions, flattened to what a phone can read."""
+    items = dsh_rpc("session.list", {}).get("items", [])
+    out = []
+    for it in items:
+        proj = (it.get("projections") or {}).get("values") or {}
+        stats = proj.get("sessionStats") or {}
+        usage = proj.get("tokenUsage") or {}
+        press = proj.get("contextPressure") or {}
+        window = press.get("contextWindow") or 0
+        out.append({
+            "kind": "session",
+            "id": it.get("sessionId"),
+            "title": (proj.get("title") or "").strip() or "(untitled)",
+            "running": bool(it.get("running")),
+            "blank": bool(it.get("blank")),
+            "cwd": it.get("cwd") or "",
+            "preset": it.get("agentPreset") or "",
+            "updated_at": it.get("updatedAt"),
+            "turns": stats.get("turns"),
+            "steps": stats.get("steps"),
+            "out_tokens": usage.get("outputTokens"),
+            "tok_s": _tok_s(stats),
+            "ctx_pct": (round(100 * press.get("pressureTokens", 0) / window)
+                        if window else None),
+        })
+    out.sort(key=lambda s: (not s["running"], -(s.get("updated_at") or 0)))
+    return out
+
+
+def _text_of(message: dict) -> str:
+    parts = []
+    for c in (message.get("content") or []):
+        if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
+            parts.append(str(c["text"]))
+    return " ".join(parts).strip()
+
+
+def read_session_digest(session_id: str, steps: int) -> dict:
+    """Step digest plus one raw line — variant 1b-iii, now that events exist.
+
+    The review chose 1b-iii but noted it needs an event stream rather than log
+    parsing. session.history is that stream: step/start, assistant/message,
+    tool/call, tool/result. Nothing here is inferred from terminal text.
+    """
+    value = dsh_rpc("session.history", {"sessionId": session_id,
+                                        "maxMessages": max(20, steps * 6)})
+    events = [e.get("event", e) for e in (value.get("events") or [])]
+    by_step: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    raw_last = ""
+
+    for ev in events:
+        etype, data = ev.get("type"), (ev.get("data") or {})
+        key = (data.get("turn"), data.get("step"))
+        if etype in ("assistant/message", "tool/call", "step/start") and key[1] is not None:
+            if key not in by_step:
+                by_step[key] = {"turn": key[0], "step": key[1], "text": "", "tools": [],
+                                "time": ev.get("time")}
+                order.append(key)
+        if etype == "assistant/message":
+            said = _text_of(data.get("message") or {})
+            if said:
+                by_step[key]["text"] = said.splitlines()[0][:180]
+        elif etype == "tool/call":
+            name = data.get("name")
+            if name:
+                by_step[key]["tools"].append(name)
+        elif etype == "tool/result":
+            # One raw line of ground truth beside the digest (1b-iii): if the
+            # digest is wrong, this is what the tool actually answered.
+            for c in ((data.get("message") or {}).get("content") or []):
+                got = c.get("content") if isinstance(c, dict) else None
+                if isinstance(got, list):
+                    got = " ".join(str(x.get("text", "")) for x in got
+                                   if isinstance(x, dict) and x.get("type") == "text")
+                if isinstance(got, str) and got.strip():
+                    lines = [l for l in got.strip().splitlines() if l.strip()]
+                    if lines:
+                        raw_last = lines[-1].strip()[:200]
+        elif etype == "user/message":
+            said = _text_of(data)
+            if said:
+                raw_last = said.splitlines()[0][:200]
+
+    digest = [by_step[k] for k in order][-steps:]
+    return {"digest": digest, "raw_last": raw_last, "has_more": bool(value.get("hasMore"))}
 
 
 class Snapshot:
@@ -210,12 +347,63 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True, "host": socket.gethostname()})
 
         if parts == ["state"]:
-            snap = SNAPSHOT.get()
+            # Two independent sources. Either may be down on its own, and the
+            # phone is told WHICH — half the herd rendered as the whole herd is
+            # the same lie as stale numbers rendered as fresh.
+            sources, agents, summary, sessions = {}, [], {}, []
+            try:
+                snap = SNAPSHOT.get()
+                agents = [{**a, "cwd_short": short_path(a["cwd"])} for a in snap["agents"]]
+                summary = snap["summary"]
+                sources["herdr"] = "ok"
+            except HerdrError as e:
+                sources["herdr"] = f"{e.code}: {e.detail}"[:160]
+            try:
+                sessions = [{**x, "cwd_short": short_path(x["cwd"])} for x in read_sessions()]
+                sources["dsh"] = "ok"
+            except DshError as e:
+                sources["dsh"] = f"{e.code}: {e.detail}"[:160]
+
+            if "ok" not in sources.values():
+                return self._json(503, {"error": "no_sources", "sources": sources})
             return self._json(200, {
                 "host": socket.gethostname(),
-                "agents": [{**a, "cwd_short": short_path(a["cwd"])} for a in snap["agents"]],
-                "summary": snap["summary"],
+                "sources": sources,
+                "agents": agents,
+                "summary": summary,
+                "sessions": sessions,
+                "running": [s for s in sessions if s["running"]],
             })
+
+        if len(parts) >= 2 and parts[0] == "session":
+            session_id = parts[1]
+            if len(parts) == 2 and self.command in ("GET", "HEAD"):
+                try:
+                    steps = max(3, min(60, int(query.get("steps", ["14"])[0])))
+                except ValueError:
+                    steps = 14
+                try:
+                    meta = next((x for x in read_sessions() if x["id"] == session_id), None)
+                    if meta is None:
+                        return self._json(404, {"error": "unknown_session", "detail": session_id})
+                    body = read_session_digest(session_id, steps)
+                except DshError as e:
+                    return self._json(503, {"error": e.code, "detail": e.detail})
+                return self._json(200, {**meta, "cwd_short": short_path(meta["cwd"]), **body})
+
+            if parts[2:] == ["cancel"] and self.command == "POST":
+                # Same discipline as the pane stop: ask, then report what dsh
+                # says now. Never assume the cancel landed.
+                try:
+                    dsh_rpc("session.cancel", {"sessionId": session_id})
+                    fresh = next((x for x in read_sessions() if x["id"] == session_id), None)
+                except DshError as e:
+                    return self._json(503, {"error": e.code, "detail": e.detail})
+                return self._json(202, {
+                    "sent": "session.cancel", "session_id": session_id,
+                    "running_now": bool(fresh and fresh["running"]),
+                    "settled": bool(fresh and not fresh["running"]),
+                })
 
         if len(parts) >= 2 and parts[0] == "agent":
             pane_id = parts[1]
@@ -297,12 +485,14 @@ def lan_ip() -> str | None:
 
 
 def main() -> int:
+    global DSH_URL
     ap = argparse.ArgumentParser(description="hearthd — harness state for the phone")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use 0.0.0.0 to reach it from the phone on the same wifi")
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--token", default=None,
                     help="shared secret; defaults to ~/.hearth/token, '' disables auth")
+    ap.add_argument("--dsh", default=DSH_URL, help=f"dsh web server base URL (default {DSH_URL})")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -311,6 +501,14 @@ def main() -> int:
     except HerdrError as e:
         print(f"warning: herdr not answering ({e.code}: {e.detail}) — "
               f"hearthd will start and report 'unreachable' honestly", file=sys.stderr)
+
+    DSH_URL = args.dsh.rstrip("/")
+    try:
+        n = len(read_sessions())
+        print(f"dsh at {DSH_URL}: {n} session(s)", flush=True)
+    except DshError as e:
+        print(f"warning: dsh not answering at {DSH_URL} ({e.code}) — "
+              f"sessions will show as unavailable, panes still work", file=sys.stderr)
 
     Handler.token = resolve_token(args.token)
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
