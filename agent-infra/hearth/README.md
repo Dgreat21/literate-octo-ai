@@ -111,13 +111,22 @@ Hearth брала данные только из herdr и поэтому рас�
 
 ## Автозапуск
 
-`bin/hearthd.plist` — LaunchAgent, чтобы демон не умирал вместе с терминалом.
-Ставится одной командой (сознательно не агентом):
+Без него иконка на телефоне мертвеет, как только закрыт терминал, из которого
+поднят демон. `bin/hearthd-install-agent` ставит LaunchAgent:
 
 ```bash
-cp agent-infra/hearth/bin/hearthd.plist ~/Library/LaunchAgents/dev.hearth.hearthd.plist
-launchctl load -w ~/Library/LaunchAgents/dev.hearth.hearthd.plist
+agent-infra/hearth/bin/hearthd-install-agent
 ```
+
+```bash
+agent-infra/hearth/bin/hearthd-install-agent --uninstall
+```
+
+Пути скрипт **вычисляет**, а не берёт из шаблона, и это не педантизм: демон
+живёт там, где лежит сам скрипт (сегодня — worktree, после влития — основной
+чекаут), а `--repo` указывает на **главный** чекаут, потому что истина трекера
+живёт там. Захардкоженный plist эти два пути путал и молча падал в цикле
+`KeepAlive`.
 
 ## Инвариант: приложение не врёт о связи
 

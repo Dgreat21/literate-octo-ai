@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# hearthd-install-agent — install hearthd as a LaunchAgent so it survives the
+# terminal, the lid and a reboot. Without it the icon on the phone is dead
+# the moment the shell that started hearthd goes away.
+#
+#   agent-infra/hearth/bin/hearthd-install-agent            # install and start
+#   agent-infra/hearth/bin/hearthd-install-agent --uninstall
+#
+# Paths are computed here, never hand-edited: the daemon lives wherever this
+# script lives (today a worktree, after the merge the main checkout), while
+# --repo points at the MAIN checkout, because the tracker's truth lives there
+# and delegating into a throwaway worktree would work on a copy of it.
+set -euo pipefail
+
+HEARTH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DAEMON="$HEARTH/hearthd/hearthd.py"
+LABEL="dev.hearth.hearthd"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+PORT="${HEARTH_PORT:-8788}"
+
+if [ "${1:-}" = "--uninstall" ]; then
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || launchctl unload -w "$PLIST" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "removed $LABEL"
+  exit 0
+fi
+
+[ -f "$DAEMON" ] || { echo "hearthd.py not found at $DAEMON"; exit 1; }
+
+# Main checkout, even when this script runs from a git worktree.
+COMMON="$(git -C "$HEARTH" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+case "$COMMON" in
+  */.git) REPO="$(dirname "$COMMON")" ;;
+  *)      REPO="$(cd "$HEARTH/../.." && pwd)" ;;
+esac
+[ -d "$REPO/mastery/tracker" ] || { echo "no mastery/tracker under $REPO"; exit 1; }
+
+PYTHON="$(command -v python3)"
+mkdir -p "$(dirname "$PLIST")"
+cat > "$PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$PYTHON</string>
+    <string>$DAEMON</string>
+    <string>--host</string><string>0.0.0.0</string>
+    <string>--port</string><string>$PORT</string>
+    <string>--repo</string><string>$REPO</string>
+  </array>
+  <key>WorkingDirectory</key><string>$REPO</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/hearthd.log</string>
+  <key>StandardErrorPath</key><string>/tmp/hearthd.err</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string></dict>
+</dict>
+</plist>
+PLISTEOF
+
+plutil -lint "$PLIST" >/dev/null
+
+# A hearthd already holding the port would make the agent flap on KeepAlive.
+pkill -f "hearthd/hearthd.py" 2>/dev/null || true
+sleep 1
+
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST"
+sleep 2
+
+if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+  echo "installed $LABEL"
+  echo "  daemon: $DAEMON"
+  echo "  repo:   $REPO"
+  echo "  log:    /tmp/hearthd.log"
+  IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+  TOKEN="$(cat "$HOME/.hearth/token" 2>/dev/null || true)"
+  [ -n "$IP" ] && echo "  phone:  http://$IP:$PORT${TOKEN:+#t=$TOKEN}"
+  echo "stop with: $0 --uninstall"
+else
+  echo "launchctl did not report the agent as loaded — check /tmp/hearthd.err"
+  exit 1
+fi
