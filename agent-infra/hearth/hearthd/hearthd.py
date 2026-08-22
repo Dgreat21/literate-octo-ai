@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib.machinery
 import mimetypes
 import os
 import re
@@ -31,6 +32,7 @@ from urllib.error import URLError, HTTPError
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 TOKEN_FILE = Path.home() / ".hearth" / "token"
+REPO = Path(__file__).resolve().parents[3]   # overridden by --repo
 DSH_URL = "http://127.0.0.1:3081"   # the dsh web server; overridden by --dsh
 DSH_TIMEOUT = 6.0
 HERDR_TIMEOUT = 4.0          # seconds; herdr is local, anything slower is a fault
@@ -220,6 +222,90 @@ def read_session_digest(session_id: str, steps: int) -> dict:
     return {"digest": digest, "raw_last": raw_last, "has_more": bool(value.get("hasMore"))}
 
 
+# ── tracker ──────────────────────────────────────────────────
+# The tracker is CSV in the repo, and it stays the single source of truth
+# (rule-3): hearthd reads it, never caches it, and never writes it. Writing a
+# ticket from the phone would need the lock protocol — out of scope here.
+
+TRACKER_EDGE_KIND = {"входит в": "parent", "блокирует": "blocks",
+                     "реализует": "realises", "относится к": "relates"}
+
+
+def _csv(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    import csv as _csv_mod
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        return [dict(r) for r in _csv_mod.DictReader(fh)]
+
+
+def read_tracker() -> dict:
+    root = REPO / "mastery" / "tracker"
+    nodes: list[dict] = []
+    for row in _csv(root / "goals.csv") + _csv(root / "tasks.csv"):
+        key = (row.get("ключ") or "").strip()
+        if not key:
+            continue
+        nodes.append({
+            "key": key,
+            "type": (row.get("тип") or "").strip(),
+            "title": (row.get("название") or "").strip(),
+            "status": (row.get("статус_тег") or "").strip(),
+            "note": (row.get("статус") or "").strip(),
+            "author": (row.get("автор") or "").strip(),
+            "sprint": (row.get("спринт") or "").strip(),
+            "dod": (row.get("dod") or "").strip(),
+            "description": (row.get("описание") or "").strip(),
+            "resolution": (row.get("резолюция") or "").strip(),
+        })
+    edges = []
+    for row in _csv(root / "links.csv"):
+        kind = (row.get("тип") or "").strip()
+        edges.append({
+            "from": (row.get("откуда") or "").strip(),
+            "to": (row.get("куда") or "").strip(),
+            "type": kind,
+            "kind": TRACKER_EDGE_KIND.get(kind, "relates"),
+        })
+    known = {n["key"] for n in nodes}
+    edges = [e for e in edges if e["from"] in known and e["to"] in known]
+    return {"nodes": nodes, "edges": edges, "root": str(root)}
+
+
+def _delegate_prompt(key: str) -> str:
+    """Reuse bin/delegate's prompt so the phone and the CLI delegate identically."""
+    import importlib.util
+    path = REPO / "agent-infra" / "stack" / "bin" / "delegate"
+    spec = importlib.util.spec_from_loader("hearth_delegate",
+                                           importlib.machinery.SourceFileLoader("hearth_delegate", str(path)))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.build_prompt(key)
+
+
+def delegate_ticket(key: str) -> dict:
+    """Open a fresh dsh session in the repo and queue the ticket into it.
+
+    Deliberately a session, not a headless run: the point is an agent in the
+    next session over — visible in the GUI, and visible on this phone the
+    moment it starts working.
+    """
+    prompt = _delegate_prompt(key)
+    created = dsh_rpc("session.create", {"cwd": str(REPO)})
+    session_id = created.get("sessionId")
+    if not session_id:
+        raise DshError("dsh_no_session", "session.create returned no id")
+    try:
+        dsh_rpc("session.rename", {"sessionId": session_id, "title": f"{key} — делегировано с телефона"})
+    except DshError:
+        pass  # a nameless session still works; the prompt is what matters
+    dsh_rpc("session.prompt", {
+        "sessionId": session_id, "mode": "queue",
+        "content": [{"type": "text", "text": prompt}],
+    })
+    return {"session_id": session_id, "key": key, "prompt_chars": len(prompt)}
+
+
 class Snapshot:
     """Herd state with a one-second de-bounce. A failure is never cached."""
 
@@ -342,6 +428,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api(self, path: str, query: dict) -> None:
         parts = [unquote(p) for p in path.split("/") if p][1:]  # drop "api"; pane ids carry ":"
+
+        if parts == ["tracker"]:
+            t = read_tracker()
+            if not t["nodes"]:
+                return self._json(503, {"error": "tracker_empty", "detail": t["root"]})
+            return self._json(200, t)
+
+        if len(parts) == 3 and parts[0] == "tracker" and parts[2] == "delegate" \
+                and self.command == "POST":
+            key = parts[1]
+            if not re.fullmatch(r"[A-Z][A-Z0-9]*-\d+", key):
+                return self._json(400, {"error": "bad_key", "detail": key})
+            if not any(n["key"] == key for n in read_tracker()["nodes"]):
+                return self._json(404, {"error": "unknown_ticket", "detail": key})
+            dry = query.get("dry", ["0"])[0] not in ("0", "", "false")
+            try:
+                # dry=1 builds the prompt and stops. Starting an agent on a
+                # ticket is not a thing to do by accident, so the preview path
+                # exists and the phone asks for a 700 ms hold before the real one.
+                if dry:
+                    return self._json(200, {"key": key, "dry": True,
+                                            "prompt": _delegate_prompt(key)})
+                return self._json(202, delegate_ticket(key))
+            except DshError as e:
+                return self._json(503, {"error": e.code, "detail": e.detail})
 
         if parts == ["health"]:
             return self._json(200, {"ok": True, "host": socket.gethostname()})
@@ -484,14 +595,34 @@ def lan_ip() -> str | None:
     return None
 
 
+def main_repo() -> Path:
+    """The main checkout, even when hearthd runs from a git worktree — the
+    tracker lives there, and delegating into a throwaway worktree would work
+    on a copy of the truth."""
+    guess = Path(__file__).resolve().parents[3]
+    try:
+        out = subprocess.run(["git", "-C", str(guess), "rev-parse", "--path-format=absolute",
+                              "--git-common-dir"], capture_output=True, text=True, timeout=5)
+        common = out.stdout.strip()
+        if out.returncode == 0 and common.endswith("/.git"):
+            main = Path(common).parent
+            if (main / "mastery" / "tracker").is_dir():
+                return main
+    except Exception:  # noqa: BLE001
+        pass
+    return guess
+
+
 def main() -> int:
-    global DSH_URL
+    global DSH_URL, REPO
     ap = argparse.ArgumentParser(description="hearthd — harness state for the phone")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use 0.0.0.0 to reach it from the phone on the same wifi")
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--token", default=None,
                     help="shared secret; defaults to ~/.hearth/token, '' disables auth")
+    ap.add_argument("--repo", default=None,
+                    help="repo root holding mastery/tracker (default: the main worktree)")
     ap.add_argument("--dsh", default=DSH_URL, help=f"dsh web server base URL (default {DSH_URL})")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
@@ -503,6 +634,9 @@ def main() -> int:
               f"hearthd will start and report 'unreachable' honestly", file=sys.stderr)
 
     DSH_URL = args.dsh.rstrip("/")
+    REPO = Path(args.repo).resolve() if args.repo else main_repo()
+    tnodes = len(read_tracker()["nodes"])
+    print(f"tracker at {REPO}/mastery/tracker: {tnodes} node(s)", flush=True)
     try:
         n = len(read_sessions())
         print(f"dsh at {DSH_URL}: {n} session(s)", flush=True)

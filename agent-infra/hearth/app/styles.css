@@ -141,12 +141,12 @@ body {
 
 /* ── tab bar ──────────────────────────────────────────────── */
 .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:30;
-  display:grid; grid-template-columns:repeat(4,1fr); gap:2px;
+  display:grid; grid-template-columns:repeat(5,1fr); gap:2px;
   padding:8px 10px calc(8px + var(--safe-b));
   background:color-mix(in srgb,var(--bg) 88%, transparent);
   backdrop-filter:blur(16px) saturate(170%); -webkit-backdrop-filter:blur(16px) saturate(170%);
   border-top:1px solid var(--divider); }
-.tabbar button { appearance:none; border:0; background:none; font:inherit; font-size:12.5px;
+.tabbar button { appearance:none; border:0; background:none; font:inherit; font-size:11.5px;
   color:var(--n600); padding:9px 2px; border-radius:11px; cursor:pointer; }
 .tabbar button.on { color:var(--accent-700); font-weight:600; background:color-mix(in srgb,var(--accent-300) 40%, transparent); }
 
@@ -171,3 +171,33 @@ body {
 .step .stext { font-size:13.5px; line-height:1.42; color:var(--ink-text); word-break:break-word; }
 .step .stools { font-family:var(--mono); font-size:10.5px; color:var(--accent-400); margin-top:2px; }
 .tail.rawline { margin-top:14px; white-space:pre-wrap; color:rgba(255,255,255,.62); }
+
+/* ── tracker graph ────────────────────────────────────────── */
+#graph-wrap { overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch;
+  margin:0 -18px 14px; padding:0 18px; }
+#graph { display:block; }
+#graph .edge { stroke-width:1.6; }
+#graph .edge.parent   { stroke:var(--n400); }
+#graph .edge.realises { stroke:var(--accent-2-400); stroke-dasharray:1 5; stroke-linecap:round; }
+#graph .edge.blocks   { stroke:var(--accent); stroke-dasharray:5 4; }
+#graph .edge.relates  { stroke:var(--n300); stroke-dasharray:2 4; }
+#graph .node { cursor:pointer; }
+#graph .nbox { stroke:var(--divider); stroke-width:1; }
+#graph .nbox.done   { fill:var(--accent-2-400); }
+#graph .nbox.review { fill:var(--accent-300); }
+#graph .nbox.work   { fill:var(--accent-400); }
+#graph .nbox.idle   { fill:var(--surface); }
+#graph .node.sel .nbox { stroke:var(--text); stroke-width:2.5; }
+#graph .nkey   { font-family:var(--mono); font-size:11px; font-weight:600; fill:var(--text); }
+#graph .ntitle { font-size:11px; fill:var(--n700); }
+
+.thead { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.thead b { font-family:var(--mono); font-size:14px; }
+.ttitle { font-family:'Caprasimo',Georgia,serif; font-size:19px; line-height:1.2; margin:2px 0 8px; }
+.tlabel { font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--n600); margin:12px 0 4px; }
+.tbody { font-size:13.5px; line-height:1.5; color:var(--n800,#474238); margin:0 0 4px; white-space:pre-wrap; }
+.card .hold { background:var(--accent); color:#fff; }
+.card .hold .fill { background:var(--accent-700); }
+.btn.wide { width:100%; margin-top:9px; }
+.tag.review { background:var(--accent-300); color:var(--accent-800,#643312); }
+.tag.work   { background:var(--accent-400); color:#fff; }

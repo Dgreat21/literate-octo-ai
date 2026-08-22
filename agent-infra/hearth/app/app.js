@@ -39,6 +39,9 @@ const S = {
   tail: { pane: null, lines: [], asOf: null },
   view: { id: null, digest: [], raw_last: '', asOf: null },
   autoscroll: true,
+  tracker: { nodes: [], edges: [], at: 0 },
+  ticket: null,            // selected tracker key
+  delegate: null,          // { key, at, outcome, session_id }
   stop: null,              // { key, at, outcome }
   token: localStorage.getItem('hearth.token') || '',
 };
@@ -398,11 +401,173 @@ function renderSettings() {
   b.append(forget);
 }
 
+// ── tracker ──────────────────────────────────────────────────
+// Layered by lineage: goals at the top, then whatever hangs off them. The graph
+// is the tracker's own shape (links.csv), not a second opinion about it.
+const T_STATUS_TONE = {
+  'закрыт': 'done', 'ревью': 'review', 'тестирование': 'review',
+  'разработка': 'work', 'в беклоге': 'idle', 'планирование': 'idle', 'анализ': 'idle',
+};
+const T_ROOT_TYPES = ['цель', 'проект', 'веха'];
+
+async function pollTracker(force) {
+  if (!force && Date.now() - S.tracker.at < 30000) return;
+  try {
+    const d = await api('/api/tracker');
+    S.tracker = { nodes: d.nodes || [], edges: d.edges || [], at: Date.now() };
+    markOk(d);
+  } catch (err) { markDown(err); }
+  render();
+}
+
+function layout(nodes, edges) {
+  const byKey = new Map(nodes.map((n) => [n.key, n]));
+  const parent = new Map();
+  edges.filter((e) => e.kind === 'parent' || e.kind === 'realises')
+       .forEach((e) => { if (!parent.has(e.from)) parent.set(e.from, e.to); });
+
+  const depth = (k, seen = new Set()) => {
+    if (seen.has(k)) return 0;
+    seen.add(k);
+    const p = parent.get(k);
+    return p && byKey.has(p) ? 1 + depth(p, seen) : 0;
+  };
+  const rows = new Map();
+  nodes.forEach((n) => {
+    const d = T_ROOT_TYPES.includes(n.type) && !parent.has(n.key) ? 0 : depth(n.key);
+    if (!rows.has(d)) rows.set(d, []);
+    rows.get(d).push(n);
+  });
+
+  const W = 128, H = 46, GX = 16, GY = 62;
+  const pos = new Map();
+  let maxW = 0;
+  [...rows.keys()].sort((a, b) => a - b).forEach((d) => {
+    const row = rows.get(d);
+    row.sort((a, b) => (parent.get(a.key) || '').localeCompare(parent.get(b.key) || '') || a.key.localeCompare(b.key));
+    row.forEach((n, i) => pos.set(n.key, { x: 12 + i * (W + GX), y: 12 + d * (H + GY), w: W, h: H }));
+    maxW = Math.max(maxW, 12 + row.length * (W + GX));
+  });
+  const maxH = 12 + (Math.max(...rows.keys()) + 1) * (H + GY);
+  return { pos, width: maxW, height: maxH };
+}
+
+function renderTracker() {
+  const nodes = S.tracker.nodes, edges = S.tracker.edges;
+  $('#tracker-sub').textContent = nodes.length
+    ? `${nodes.length} tickets · ${edges.length} links · tap one to send it to an agent`
+    : 'no tracker data';
+  const svg = $('#graph');
+  svg.textContent = '';
+  if (!nodes.length) return;
+
+  const { pos, width, height } = layout(nodes, edges);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (t, attrs) => { const e = document.createElementNS(NS, t);
+    Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v)); return e; };
+
+  edges.forEach((e) => {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    if (!a || !b) return;
+    const x1 = a.x + a.w / 2, y1 = a.y, x2 = b.x + b.w / 2, y2 = b.y + b.h;
+    const path = mk('path', {
+      d: `M ${x1} ${y1} C ${x1} ${y1 - 26}, ${x2} ${y2 + 26}, ${x2} ${y2}`,
+      class: 'edge ' + e.kind, fill: 'none',
+    });
+    svg.append(path);
+  });
+
+  nodes.forEach((n) => {
+    const p = pos.get(n.key);
+    if (!p) return;
+    const g = mk('g', { class: 'node' + (S.ticket === n.key ? ' sel' : ''), tabindex: '0' });
+    g.append(mk('rect', { x: p.x, y: p.y, width: p.w, height: p.h, rx: 11,
+      class: 'nbox ' + (T_STATUS_TONE[n.status] || 'idle') }));
+    const k = mk('text', { x: p.x + 10, y: p.y + 17, class: 'nkey' });
+    k.textContent = n.key;
+    const t = mk('text', { x: p.x + 10, y: p.y + 33, class: 'ntitle' });
+    t.textContent = n.title.length > 17 ? n.title.slice(0, 16) + '…' : n.title;
+    g.append(k, t);
+    g.addEventListener('click', () => { S.ticket = n.key; render(); });
+    svg.append(g);
+  });
+
+  renderTicket();
+}
+
+function renderTicket() {
+  const box = $('#ticket');
+  box.textContent = '';
+  const n = S.tracker.nodes.find((x) => x.key === S.ticket);
+  if (!n) { box.append(el('div', 'note', 'Pick a ticket in the graph.')); return; }
+
+  const c = el('div', 'card');
+  const head = el('div', 'thead');
+  head.append(el('b', null, n.key));
+  head.append(el('span', 'tag ' + (T_STATUS_TONE[n.status] || 'idle'), n.status || '—'));
+  c.append(head);
+  c.append(el('div', 'ttitle', n.title));
+  if (n.note) c.append(el('div', 'rmeta', n.note));
+  if (n.description) c.append(el('p', 'tbody', n.description));
+  if (n.dod) { c.append(el('div', 'tlabel', 'DoD')); c.append(el('p', 'tbody', n.dod)); }
+
+  const blockers = S.tracker.edges.filter((e) => e.kind === 'blocks' && e.to === n.key)
+    .map((e) => e.from)
+    .filter((k) => { const b = S.tracker.nodes.find((x) => x.key === k); return b && b.status !== 'закрыт'; });
+  if (blockers.length) {
+    const w = el('div', 'warn');
+    w.append(el('b', null, `blocked by ${blockers.join(', ')}`));
+    w.append(el('div', 'rmeta', 'delegating anyway is your call — the agent checks blockers first'));
+    c.append(w);
+  }
+
+  const d = S.delegate && S.delegate.key === n.key ? S.delegate : null;
+  const b = el('button', 'hold');
+  b.append(el('span', 'fill'));
+  const lbl = el('span', 'lbl', 'Hold to send to an agent');
+  b.append(lbl);
+  if (d) {
+    b.classList.add('sent');
+    lbl.textContent = { 'null': 'sending…', 'sent': 'queued to a new session',
+      'failed': 'not sent — dsh refused' }[String(d.outcome)];
+    if (d.outcome !== 'failed') b.disabled = true;
+  }
+  if (!isLive()) { b.disabled = true; if (!d) lbl.textContent = 'Hold to send · no link'; }
+  if (!b.disabled) wireHold(b, () => sendDelegate(n.key));
+  c.append(b);
+
+  if (d && d.outcome === 'sent') {
+    const go = el('button', 'btn ghost wide', 'open the session');
+    go.onclick = () => { S.focus = { kind: 'session', id: d.session_id }; go2('detail'); };
+    c.append(go);
+  }
+  box.append(c);
+}
+
+async function sendDelegate(key) {
+  S.delegate = { key, at: Date.now(), outcome: null };
+  render();
+  try {
+    const d = await api(`/api/tracker/${encodeURIComponent(key)}/delegate`, { method: 'POST' });
+    markOk(d);
+    S.delegate = { key, at: Date.now(), outcome: 'sent', session_id: d.session_id };
+    pollState();
+  } catch (err) {
+    markDown(err);
+    S.delegate = { key, at: Date.now(), outcome: 'failed' };
+  }
+  render();
+}
+
 function render() {
   renderLink();
   if (S.screen === 'home') renderHome();
   else if (S.screen === 'runs') renderRuns();
   else if (S.screen === 'detail') renderDetail();
+  else if (S.screen === 'tracker') renderTracker();
   else if (S.screen === 'settings') renderSettings();
 }
 
@@ -412,7 +577,9 @@ function go(screen) {
   document.querySelectorAll('.tabbar button').forEach((t) => t.classList.toggle('on', t.dataset.go === screen));
   render();
   if (screen === 'detail') pollDetail();
+  if (screen === 'tracker') pollTracker();
 }
+const go2 = go;
 
 (function boot() {
   const m = /[#&]t=([^&]+)/.exec(location.hash);
